@@ -45,7 +45,7 @@ def detect_and_embed(event: AccessVerifyRequest) -> tuple[np.ndarray | None, flo
     # подготовленный вектор из poc/data/demo_embeddings.npz по event_id.
     # В целевой системе — SCRFD (детекция) + ArcFace buffalo_l (512-D эмбеддинг),
     # см. docs/ml.md. InsightFace установлен, но скачивание весов buffalo_l не
-    # уложилось в тайм-бокс — переключение на mock согласовано в промпте Блока 3.
+    # уложилось в выделенное время — переключение на mock.
     """
     frame_path = Path(event.frame_uri)
     if not frame_path.is_absolute():

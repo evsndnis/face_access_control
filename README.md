@@ -21,18 +21,18 @@ Demo-данные (галерея из 12 сотрудников, синтети
 
 | Компонент | Статус | Комментарий |
 |---|---|---|
-| Детекция лица | mock | InsightFace/onnxruntime установлены, но скачивание весов buffalo_l не уложилось в тайм-бокс — см. `poc/pipeline.py`. Целевой подход — SCRFD, `docs/ml.md` |
-| Оценка качества кадра | реально | Laplacian variance (blur) + min face size через OpenCV на синтетических demo-кадрах |
+| Детекция лица | mock | InsightFace/onnxruntime установлены, но требуется скачивание весов buffalo_l. Решил использовать заглушку. Целевой подход — SCRFD, `docs/ml.md` |
+| Оценка качества кадра | real | Laplacian variance (blur) + min face size через OpenCV на синтетических demo-кадрах |
 | Liveness/anti-spoofing | mock | `liveness_score` берётся из `metadata.mock_liveness_score` demo-события. Целевой подход — Silent-Face-Anti-Spoofing, `docs/ml.md` |
 | Извлечение эмбеддинга | mock | заранее подготовленные 512-D векторы (`poc/data/demo_embeddings.npz`), не ArcFace. Целевой подход — buffalo_l, `docs/ml.md` |
-| 1:N matching (ANN) | реально | FAISS `IndexFlatIP` над 12 demo-эмбеддингами (cosine через inner product). В целевой архитектуре — HNSW, `docs/ml.md` |
-| Policy engine (three-way decision) | реально | `poc/pipeline.py::decide()`, пороги захардкожены как constants модуля |
+| 1:N matching (ANN) | real | FAISS `IndexFlatIP` над 12 demo-эмбеддингами (cosine через inner product). В целевой архитектуре — HNSW, `docs/ml.md` |
+| Policy engine (three-way decision) | real | `poc/pipeline.py::decide()`, пороги захардкожены как constants модуля |
 | Интеграция с турникетом | mock | логирование + идемпотентность по `audit_id`, без реального железа |
-| Audit log | реально | JSON Lines, `poc/data/audit_log.jsonl`, без сырых изображений |
+| Audit log | real | JSON Lines, `poc/data/audit_log.jsonl`, без сырых изображений |
 
 ## Допущения и ограничения
 
-PoC использует mock-эмбеддинги и mock-liveness вместо реальных моделей (детали и обоснование — `docs/ml.md`, а также таблица выше); демо-галерея — 12 синтетических сотрудников, не сотни тысяч; пороги policy engine эвристические, не откалиброваны на реальных данных. Полный список допущений и нерешённых рисков — `SELF_REVIEW.md`.
+PoC использует mock-эмбеддинги и mock-liveness вместо реальных моделей (детали и обоснование — `docs/ml.md`, а также таблица выше); демо-галерея — 12 синтетических сотрудников; пороги policy engine эвристические, не откалиброваны на реальных данных. Полный список допущений и нерешённых рисков — `SELF_REVIEW.md`.
 
 ## Риски вне MVP
 
