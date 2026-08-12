@@ -1,77 +1,63 @@
-# Промпт для IDE-ассистента — Блок 3: Proof-of-Concept
-
 ## Контекст задания (весь, без сокращений)
 
-Я выполняю тестовое ML system design задание с тайм-боксом 4 часа: спроектировать CV/ML-систему распознавания лиц на проходной офисного кампуса — от кадра с камеры до решения о проходе (allow/deny/manual_review), с ручным контролем охраны для сомнительных случаев. Задание учебное. **PoC — не главная цель задания и не production-код**: это вспомогательный артефакт, подтверждающий, что один выбранный фрагмент архитектуры складывается в работающий сценарий. Не жертвуй качеством документации ради объёма PoC-кода — код должен быть компактным и честным, с явными пометками, что mock, а что реально.
+Я выполняю тестовое ML system design задание с тайм-боксом 4 часа: спроектировать CV/ML-систему распознавания лиц на проходной офисного кампуса — от кадра с камеры до решения о проходе (allow/deny/manual_review), с ручным контролем охраны для сомнительных случаев. Задание учебное.
 
-**Что обязательно должен показать PoC:**
-1. **Happy path**: кадр/mock-событие с камеры → детекция лица → оценка качества кадра → liveness check (mock допустим) → эмбеддинг (реальный или mock) → сравнение с базой разрешённых сотрудников → решение **allow** → турникет «открывается» (mock-вызов) → access event пишется в лог с причиной.
-2. **Risky/fallback path**: лицо не найдено, ИЛИ низкое качество кадра, ИЛИ сомнительный liveness, ИЛИ малый margin к второму кандидату, ИЛИ offline-режим → решение **manual_review** (или deny), турникет **НЕ открывается автоматически**, причина решения видна в логе.
-3. Допустимо использовать готовую CV-библиотеку, mock-модель, заранее подготовленные эмбеддинги, synthetic/demo-изображения — но нужно явно объяснить в README/комментариях, что упрощено и чем заменяется в целевой архитектуре.
+**Бизнес-контекст.** Кампус, ~12 000 сотрудников, 3 проходные × 2 камеры. Пик 8:45–9:45. False accept (пропуск постороннего) — инцидент безопасности; false reject — блокировка сотрудника и рост очереди; цена ошибок несимметрична. Биометрия требует строгого контроля доступа, ограниченного хранения, аудита.
 
-**Формальные требования к сдаче, которые проверяет PoC:**
-- PoC запускается по инструкции одной командой.
-- Есть smoke-test/demo-скрипт.
-- Happy path выдаёт `allow` для demo-сотрудника.
-- Risky/fallback path не открывает доступ автоматически.
-- Access events пишутся в лог/хранилище с причиной решения (`reasons`).
+**Технические вводные.** Целевая латентность p95 ≤ 1 секунда от кадра до команды турникету. One-to-many поиск sub-second на базе в сотни тысяч лиц. Камеры в разных условиях освещения; возможны очки/маски/головные уборы/ракурсы. Защита от spoofing обязательна. Edge может терять связь с центром — нужна деградация без автооткрытия. Сомнительные случаи → ручная проверка охраны.
 
-## Единый контракт данных (не менять, уже зафиксирован в `src/schemas.py` в Блоке 0)
+**Единый контракт данных** (`src/schemas.py`, Блок 0, не менять): Response (`AccessVerifyResponse`) содержит `decision (allow|deny|manual_review), employee_id, match_score, margin_to_second_best, quality {face_detected, quality_score, liveness_score}, reasons[], turnstile_command, requires_human_review, degraded_mode, audit_id, latency_ms`.
 
-Request (`AccessVerifyRequest`): `event_id, gate_id, camera_id, captured_at, frame_uri, metadata` (metadata: `direction, illumination, occlusion_hint, head_pose_hint, edge_node, network, cache_age_minutes`).
+## Что уже сделано в предыдущих блоках — не противоречь этому
 
-Response (`AccessVerifyResponse`): `event_id, decision_id, decision (allow|deny|manual_review), employee_id, match_score, margin_to_second_best, quality {face_detected, quality_score, liveness_score}, reasons[], turnstile_command (open|hold), requires_human_review, degraded_mode, audit_id, latency_ms`.
+**Блок 1 (docs/architecture.md):** edge/central гибрид — весь тяжёлый CV-конвейер на edge (детекция, quality, liveness, embedding); в центр уходит только эмбеддинг; 1:N поиск по FAISS-индексу с локальной репликой на edge для офлайн-режима; idempotency-ключ (`audit_id`) на команды турникету; transactional outbox pattern для синхронизации audit log в offline; audit log хранит `decision, scores, reasons, model_version, threshold_version, degraded_mode`, но НЕ сырые изображения и НЕ эмбеддинги в открытом виде.
 
-В Блоке 0 также созданы заглушки: `poc/demo.py` с функциями `run_happy_path() -> AccessVerifyResponse` и `run_risky_path() -> AccessVerifyResponse` (сейчас `raise NotImplementedError`), и `tests/test_smoke.py` с skip-тестами `test_happy_path_allows()` / `test_risky_path_does_not_open()`. Твоя задача — реализовать тела этих функций и снять skip с тестов.
+**Блок 2 (docs/ml.md):** модели — SCRFD (детекция), ArcFace/InsightFace buffalo_l (эмбеддинг, 512-D), Silent-Face-Anti-Spoofing (liveness), FAISS HNSW (1:N). Three-way decision — policy engine поверх скоров (T_high/T_low + margin_to_second_best + quality/liveness gates). Пороги калибруются по FAR/FRR (1:1) и FPIR/FNIR (1:N), демографическая проверка порогов — обязательный production-пункт (дифференциалы false positive между подгруппами могут различаться на порядки).
 
-## Уже принятые технические решения (Блоки 1–2), PoC должен им соответствовать, но в упрощённом виде
+**Блок 3 (PoC):** реализован end-to-end happy path (allow) и risky/fallback path (manual_review/deny, turnstile_command=hold) для 5 сценариев: типовой проход, плохое качество (маска/контровый свет), spoofing-попытка, low-confidence с двумя близкими кандидатами, offline с устаревшим кешем. Audit log пишется в JSON Lines с полем `reasons`.
 
-- **Детекция + эмбеддинг**: в целевой архитектуре — SCRFD (детекция) + ArcFace/InsightFace buffalo_l (эмбеддинг, 512-D, cosine similarity). В PoC — используем реальную библиотеку **InsightFace** (`pip install insightface onnxruntime`), модель-пак `buffalo_l` — она включает и детектор, и recognition-модель, значит закрывает обе задачи одним пакетом. Если библиотека не ставится/падает за 10 минут (сеть, версии, GPU/CPU-конфликт) — **не трать время на дебаг зависимостей, переключайся на fallback ниже**.
-  - **Fallback (заранее одобрен)**: mock-эмбеддинги — заранее сгенерированный `poc/data/gallery_embeddings.npy` (например, случайные 512-D векторы, L2-нормализованные, для 10–15 «сотрудников») + для «пробного» лица либо тоже случайный вектор с управляемой похожестью на одного из галереи (для happy path — специально близкий вектор; для risky — специально неоднозначный/далёкий). Явно закомментировать в коде: `# MOCK: в реальной системе — ArcFace embedding из кадра, см. docs/ml.md`.
-- **Quality-check**: реальная простая метрика — Laplacian variance (blur) через OpenCV + проверка минимального размера лица (bounding box). Не нужен ML для этого в PoC.
-- **Liveness**: **mock** — допустимо и ожидаемо согласно заданию. Реализовать как функцию, принимающую флаг/метаданные события (например по `metadata.note` или отдельному полю `mock_liveness_score` в demo-событии) и возвращающую `liveness_score`. Явно закомментировать: `# MOCK: в реальной системе — Silent-Face-Anti-Spoofing, см. docs/ml.md`.
-- **1:N matching**: реальный **FAISS** (`pip install faiss-cpu`), индекс `IndexFlatIP` или `IndexHNSWFlat` над L2-нормализованными эмбеддингами (cosine через inner product). При 10–15 демо-векторах разница Flat/HNSW не важна — бери `IndexFlatIP` для простоты, но добавь комментарий `# В целевой архитектуре — FAISS HNSW для sub-second на сотнях тысяч векторов, см. docs/ml.md`.
-- **Three-way decision (policy engine)**: отдельная чистая функция `decide(match_score, margin_to_second_best, quality_score, liveness_score, network_status) -> (decision, reasons)`, реализующая логику из docs/ml.md: T_high/T_low по match_score, gate по margin, gate по quality/liveness, offline → консервативный manual_review. Пороги — захардкодить как константы модуля с комментарием, что в проде калибруются на данных (см. docs/ml.md).
-- **Турникет**: mock-функция `send_turnstile_command(gate_id, command, idempotency_key) -> bool` — просто логирует вызов и возвращает True/False, никакой реальной интеграции. Обязательно принимает `idempotency_key` (используй `audit_id`) — это демонстрирует архитектурное решение из docs/architecture.md, даже если реального дедупликатора в PoC нет (можно просто держать `set()` уже виденных ключей в памяти процесса и логировать, если ключ повторный).
-- **Audit log**: структурированный **JSON Lines** файл `poc/data/audit_log.jsonl` — одна строка = один `AccessVerifyResponse` (сериализованный через pydantic `.model_dump_json()`) плюс сырые входные метаданные события. Никаких сырых изображений в логе не хранить (даже в PoC — держи эту дисциплину, это прямая демонстрация принципа из docs/risks-and-ops.md).
+## Технические решения-«якоря» для этого блока (из ресерча best practices)
 
-## Задача: пошагово (ориентировочные тайм-боксы внутри блока)
+- **Data drift vs model drift — ключевое различие.** Data drift = сдвиг входа (освещение, качество камеры, ракурс, occlusion) — детектируется статистикой по `quality_score`/brightness/pose БЕЗ ground truth (например PSI, KS-test; PSI > 0.25 — тревожный уровень). Model drift = падение реального качества распознавания — требует labels (delayed labels из ml.md: ручные проверки, жалобы, повторный проход по карте). Алертить эффективнее на **совместное условие** (input drift + просадка eval-метрики), чтобы снизить шум ложных алертов.
+- **Как отличить сбой камеры/освещения от деградации модели**: сегментировать метрики **по проходной и по камере отдельно**. Резкий скачок доли low-quality/отказов на ОДНОЙ камере при нормальных остальных → железо/освещение/загрязнение линзы. Равномерный медленный рост FRR по всем узлам → модель или сдвиг популяции.
+- **Audit trail для расследования**: структурированный лог с `audit_id, timestamp, camera_id, gate_id, decision, scores, reasons, model_version, threshold_version, degraded_mode` — этого достаточно, чтобы восстановить, почему принято конкретное решение, без хранения сырых изображений/эмбеддингов в открытом виде.
+- **Privacy/security governance для биометрии**: биометрический шаблон (эмбеддинг), используемый для уникальной идентификации, — данные особой категории (аналог GDPR Art. 9); хранить только эмбеддинги, не сырые изображения; шифрование at rest; RBAC к vector store и audit log; retention schedule с автоудалением; защита от model inversion атак (возможность восстановить черты лица из эмбеддинга) — через шифрование шаблонов и ограничение доступа, а не хранение в открытом виде.
+- **Idempotency + outbox** (повтор из architecture.md, но здесь — в разрезе операционной надёжности): защита от двойного открытия турникета при ретраях; локальная транзакционная запись decision+audit на edge, асинхронный sync в центр после восстановления связи.
 
-**Шаг 1 — данные для демо.** Создать `poc/data/demo_events.json` — список из 5 событий по образцу референсных из задания (см. ниже), и `poc/data/gallery_embeddings.npy` + `poc/data/gallery_index.json` (`employee_id → индекс в galley`) для 10-15 demo-сотрудников.
+## Задача
 
-Референсные demo-события (адаптируй под свою реализацию, но сохрани смысл):
-1. `e-1001` — online, normal illumination → должен дать **allow**.
-2. `e-1002` — online, backlight + occlusion_hint=mask → низкое quality_score → **manual_review**.
-3. `e-1003` — online, попытка spoofing (в demo — просто мок с низким liveness_score) → **deny/manual_review**, турникет не открывается.
-4. `e-1004` — online, два близких кандидата (маленький margin_to_second_best) → **manual_review**.
-5. `e-1005` — offline, cache_age_minutes=240 → **manual_review** (degraded_mode=true), НЕ allow, даже если скор хороший — офлайн-неуверенность должна побеждать.
+Заполнить два файла (уже существуют с заголовками-заглушками из Блока 0 — сохрани заголовки, наполни содержанием). **Оба файла — короткие**, по 3-4 пункта на направление, это НЕ развёрнутые эссе — задание явно требует компактности здесь.
 
-**Шаг 2 — reasons и quality.** Реализовать функции `detect_and_embed(frame_or_mock) -> (embedding, quality_score, face_detected)` и `check_liveness(...) -> liveness_score` (с учётом fallback-варианта из раздела выше).
+### docs/monitoring.md — секции:
 
-**Шаг 3 — ANN search.** Загрузка `gallery_embeddings.npy` в FAISS-индекс при старте, функция `search(embedding) -> (employee_id, match_score, margin_to_second_best)` (top-2 поиск, margin = score[0] - score[1]).
+1. **## Технические метрики** — latency p50/p95/p99 по стадиям (detect/quality/liveness/embed/ANN search) и end-to-end; доступность камер и edge-узлов (heartbeat/uptime); ошибки интеграции с турникетом (failed commands, timeouts); latency поиска по базе отдельно от общего p95.
+2. **## ML-метрики** — false reject rate (по delayed labels), доля manual_review, доля отказов по качеству кадра, liveness failure rate, распределение match_score/margin, drift входящих кадров по качеству и ракурсу.
+3. **## Бизнес-метрики** — если уже есть в docs/product.md (может не быть — у нас трек ИИ, product.md необязателен), здесь достаточно назвать: время прохода, доля автоматических проходов, нагрузка на охрану (число manual_review в день).
+4. **## Алерты** — конкретный короткий список стартовых алертов с порогами: p95 latency > 1с; доступность камеры/edge-узла ниже порога; рост доли manual_review сверх baseline; всплеск liveness failures; PSI по quality-фичам > 0.25; всплеск failed turnstile commands.
+5. **## Data drift vs model drift** — объяснить разницу (см. «якоря» выше) и как их различать на практике, включая сегментацию по проходной/камере.
+6. **## Audit trail** — как расследуется конкретное событие доступа: какие поля лога позволяют восстановить причину решения, без раскрытия чувствительных сырых данных.
 
-**Шаг 4  — policy engine.** Реализовать `decide(...)` с порогами и правилами (см. выше), возвращающую `decision` и список `reasons` (человекочитаемые строки: `"quality_ok"`, `"liveness_below_threshold"`, `"margin_too_small"`, `"offline_conservative_decision"` и т.п. — по аналогии с примером ответа API в задании).
+### docs/risks-and-ops.md — секции:
 
-**Шаг 5 — сборка pipeline и demo.py.** Реализовать `run_happy_path()` и `run_risky_path()` в `poc/demo.py`: каждая функция берёт соответствующее demo-событие, прогоняет весь pipeline (detect → quality → liveness → embed → search → decide → turnstile command → audit log write) и возвращает `AccessVerifyResponse`. В `if __name__ == "__main__":` — прогнать обе, красиво напечатать в консоль результат (decision, reasons, latency_ms) для обоих путей плюс путь к audit log файлу.
+1. **## Low-latency, надёжность и деградация** — 3-4 пункта: что работает на edge vs в центре и почему это даёт p95 ≤ 1с; кеширование базы эмбеддингов и access policy на edge и как оно обновляется; поведение при потере сети/недоступности модели/базы (degraded_mode, консервативный manual_review по умолчанию); идемпотентность команд турникету и защита от двойного открытия; offline-логирование и синхронизация после восстановления связи (transactional outbox).
+2. **## Privacy, safety и governance** — 3-4 пункта: что считается биометрическими данными (эмбеддинг = special category data); храним только эмбеддинги, не сырые изображения, с указанием ориентировочного retention и шифрования; кто имеет доступ к базе шаблонов и audit log (RBAC); удаление сотрудника и отзыв доступа, включая распространение на edge-кеши; защита от model inversion / утечки шаблонов на уровне дизайна; какие решения нельзя принимать полностью автоматически (allow при низкой уверенности/офлайне — никогда автоматически); как объяснить сотруднику причину отказа, не раскрывая чувствительных деталей (например «обратитесь к охране», а не конкретный liveness_score).
 
-**Шаг 6 — smoke-тест и README.** Снять `@pytest.mark.skip` в `tests/test_smoke.py`, реализовать проверки: `test_happy_path_allows()` — `response.decision == "allow"` и `response.turnstile_command == "open"`; `test_risky_path_does_not_open()` — `response.decision != "allow"` и `response.turnstile_command == "hold"`. Обновить `README.md`: раздел «Как запустить PoC» — конкретные команды (`pip install -r requirements.txt`, `python -m poc.demo`, `pytest tests/`), обновить таблицу «реализовано реально vs mock» (детекция/embedding — реально если InsightFace завёлся или mock если fallback; liveness — mock; ANN — реально FAISS; турникет — mock; audit log — реально).
+Если по юридическим деталям нет уверенности — явно зафиксировать одной строкой, что биометрия — чувствительные данные, требующие отдельного правового и организационного контроля (не пытаться выдумывать юридическую экспертизу).
 
 ## Формат и ограничения
 
-- Код — Python, стиль простой и читаемый, докстринги короткие, не переусложняй абстракциями (никаких лишних классов/фреймворков — это PoC на 70 минут).
-- Каждое упрощение — с комментарием `# MOCK: ...` или `# SIMPLIFIED: ...`, указывающим, что в целевой архитектуре (см. docs/architecture.md, docs/ml.md).
-- Если на Шаге 1 установка InsightFace/onnxruntime не поднимается за ~10 минут — **сразу** переключайся на fallback с mock-эмбеддингами и не трать время дальше, это заранее одобренное решение, не спрашивай.
-- В конце обязательно прогнать `python -m poc.demo` и `pytest tests/` и убедиться, что всё зелёное — покажи мне финальный вывод обеих команд.
-- Не трогай docs/*.md и AI_USAGE.md/SELF_REVIEW.md в этом блоке — они не в скоупе.
+- Пиши по-русски, коротко и по делу — **буквально 3-4 пункта на каждое направление**, не длинные абзацы. Это самые компактные доки из всех.
+- Не дублируй бизнес-метрики подробно, если они не описаны в другом файле — просто назови.
+- Не противоречь docs/architecture.md и docs/ml.md — при сомнении сверься с ними перед финализацией.
+- В конце каждого файла ничего не добавляй сверх запрошенных секций.
 
 ## Критерии готовности
 
-- [ ] `python -m poc.demo` запускается без ошибок, печатает `allow` для happy path и `manual_review`/`deny` (с `turnstile_command=hold`) для risky path.
-- [ ] `pytest tests/` — оба smoke-теста зелёные, ни одного skip.
-- [ ] `poc/data/audit_log.jsonl` содержит записи с `reasons` после запуска demo.
-- [ ] Offline-событие (#5) даёт консервативное решение независимо от match_score.
-- [ ] README.md обновлён с рабочей командой запуска и честной таблицей real/mock.
-- [ ] Все mock-места явно закомментированы со ссылкой на целевой подход из docs/ml.md.
-- [ ] Git-коммит с сообщением вида `poc: end-to-end happy + risky path, FAISS matching, policy engine (Block 3)`.
+- [ ] docs/monitoring.md — все 6 секций заполнены, есть конкретные пороги в алертах (не «мониторить latency», а «p95 > 1с»).
+- [ ] docs/risks-and-ops.md — оба направления по 3-4 пункта, не превращены в лонгрид.
+- [ ] Явно объяснена разница data drift vs model drift и как отличить сбой камеры от деградации модели.
+- [ ] Явно указано: биометрия хранится только как эмбеддинг, не как сырое изображение, с обоснованием (privacy + model inversion).
+- [ ] Явно указано, что решения о доступе при низкой уверенности/офлайне никогда не принимаются полностью автоматически.
+- [ ] Git-коммит с сообщением вида `docs: monitoring and risks-and-ops (Block 4)`.
 
-Не задавай уточняющих вопросов — весь необходимый контекст и все fallback-решения даны выше, действуй.
+Не задавай уточняющих вопросов — весь необходимый контекст дан выше, действуй.
