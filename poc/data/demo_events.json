@@ -1,0 +1,87 @@
+[
+  {
+    "event_id": "e-1001",
+    "gate_id": "gate-1",
+    "camera_id": "cam-1a",
+    "captured_at": "2026-08-12T08:52:03+03:00",
+    "frame_uri": "poc/data/frames/sharp.jpg",
+    "metadata": {
+      "direction": "in",
+      "illumination": "normal",
+      "occlusion_hint": "none",
+      "head_pose_hint": "frontal",
+      "edge_node": "edge-gate-1",
+      "network": "online",
+      "cache_age_minutes": 2,
+      "mock_liveness_score": 0.97
+    }
+  },
+  {
+    "event_id": "e-1002",
+    "gate_id": "gate-1",
+    "camera_id": "cam-1b",
+    "captured_at": "2026-08-12T08:53:10+03:00",
+    "frame_uri": "poc/data/frames/blurry.jpg",
+    "metadata": {
+      "direction": "in",
+      "illumination": "backlight",
+      "occlusion_hint": "mask",
+      "head_pose_hint": "frontal",
+      "edge_node": "edge-gate-1",
+      "network": "online",
+      "cache_age_minutes": 1,
+      "mock_liveness_score": 0.95
+    }
+  },
+  {
+    "event_id": "e-1003",
+    "gate_id": "gate-2",
+    "camera_id": "cam-2a",
+    "captured_at": "2026-08-12T08:55:41+03:00",
+    "frame_uri": "poc/data/frames/sharp.jpg",
+    "metadata": {
+      "direction": "in",
+      "illumination": "normal",
+      "occlusion_hint": "none",
+      "head_pose_hint": "frontal",
+      "edge_node": "edge-gate-2",
+      "network": "online",
+      "cache_age_minutes": 1,
+      "mock_liveness_score": 0.12
+    }
+  },
+  {
+    "event_id": "e-1004",
+    "gate_id": "gate-2",
+    "camera_id": "cam-2b",
+    "captured_at": "2026-08-12T09:01:22+03:00",
+    "frame_uri": "poc/data/frames/sharp.jpg",
+    "metadata": {
+      "direction": "in",
+      "illumination": "normal",
+      "occlusion_hint": "none",
+      "head_pose_hint": "slight_turn",
+      "edge_node": "edge-gate-2",
+      "network": "online",
+      "cache_age_minutes": 1,
+      "mock_liveness_score": 0.96
+    }
+  },
+  {
+    "event_id": "e-1005",
+    "gate_id": "gate-3",
+    "camera_id": "cam-3a",
+    "captured_at": "2026-08-12T09:10:05+03:00",
+    "frame_uri": "poc/data/frames/sharp.jpg",
+    "metadata": {
+      "direction": "in",
+      "illumination": "normal",
+      "occlusion_hint": "none",
+      "head_pose_hint": "frontal",
+      "edge_node": "edge-gate-3",
+      "network": "offline",
+      "cache_age_minutes": 240,
+      "mock_liveness_score": 0.97
+    }
+  }
+]

@@ -1,106 +1,77 @@
-# Промпт для IDE-ассистента — Блок 2: docs/ml.md (45 мин)
-
-Вставь это целиком в чат IDE-ассистента как отдельную задачу. Ассистент не видел предыдущих сообщений — весь контекст ниже.
-
----
+# Промпт для IDE-ассистента — Блок 3: Proof-of-Concept
 
 ## Контекст задания (весь, без сокращений)
 
-Я выполняю тестовое ML system design задание с тайм-боксом 4 часа: спроектировать CV/ML-систему распознавания лиц на проходной офисного кампуса — от кадра с камеры до решения о проходе (allow/deny/manual_review), с ручным контролем охраны для сомнительных случаев. Задание учебное — цель показать качество инженерного мышления, а не построить production-систему.
+Я выполняю тестовое ML system design задание с тайм-боксом 4 часа: спроектировать CV/ML-систему распознавания лиц на проходной офисного кампуса — от кадра с камеры до решения о проходе (allow/deny/manual_review), с ручным контролем охраны для сомнительных случаев. Задание учебное. **PoC — не главная цель задания и не production-код**: это вспомогательный артефакт, подтверждающий, что один выбранный фрагмент архитектуры складывается в работающий сценарий. Не жертвуй качеством документации ради объёма PoC-кода — код должен быть компактным и честным, с явными пометками, что mock, а что реально.
 
-**Бизнес-контекст.** Кампус, ~12 000 сотрудников, 3 проходные × 2 камеры. Пик 8:45–9:45 — очереди. Сейчас доступ по картам, карту можно передать коллеге. Нужно ускорить проход и снизить нагрузку на охрану, но false accept (пропуск постороннего) — инцидент безопасности, а false reject — блокировка сотрудника и рост очереди; цена ошибок несимметрична. Биометрия требует строгого контроля доступа и аудита.
+**Что обязательно должен показать PoC:**
+1. **Happy path**: кадр/mock-событие с камеры → детекция лица → оценка качества кадра → liveness check (mock допустим) → эмбеддинг (реальный или mock) → сравнение с базой разрешённых сотрудников → решение **allow** → турникет «открывается» (mock-вызов) → access event пишется в лог с причиной.
+2. **Risky/fallback path**: лицо не найдено, ИЛИ низкое качество кадра, ИЛИ сомнительный liveness, ИЛИ малый margin к второму кандидату, ИЛИ offline-режим → решение **manual_review** (или deny), турникет **НЕ открывается автоматически**, причина решения видна в логе.
+3. Допустимо использовать готовую CV-библиотеку, mock-модель, заранее подготовленные эмбеддинги, synthetic/demo-изображения — но нужно явно объяснить в README/комментариях, что упрощено и чем заменяется в целевой архитектуре.
 
-**Технические вводные.**
-- Масштаб: сотни тысяч лиц в базе (рост кампуса/площадок), пиковая нагрузка до 20 проходов/мин на проходную.
-- Целевая латентность: **p95 ≤ 1 секунда** от кадра до команды турникету (детекция → quality → liveness → embedding → 1:N matching).
-- One-to-many поиск должен быть **sub-second** на базе в сотни тысяч лиц → нужен ANN-индекс, не полный перебор.
-- Камеры в разных условиях освещения; возможны очки, маски, головные уборы, поворот головы, плохой ракурс.
-- Нужна защита от spoofing: фото с телефона, распечатка, видео с экрана.
-- Edge-устройство может терять связь с центральным сервисом — офлайн-режим должен быть предусмотрен в самой логике принятия решения (не только в инфраструктуре).
-- Для неуверенных случаев — ручной контроль охраны (manual_review), без автооткрытия турникета.
+**Формальные требования к сдаче, которые проверяет PoC:**
+- PoC запускается по инструкции одной командой.
+- Есть smoke-test/demo-скрипт.
+- Happy path выдаёт `allow` для demo-сотрудника.
+- Risky/fallback path не открывает доступ автоматически.
+- Access events пишутся в лог/хранилище с причиной решения (`reasons`).
 
-**Единый контракт данных** (зафиксирован в `src/schemas.py`, не менять поля):
+## Единый контракт данных (не менять, уже зафиксирован в `src/schemas.py` в Блоке 0)
 
-Response (`AccessVerifyResponse`) содержит: `decision (allow|deny|manual_review), employee_id, match_score, margin_to_second_best, quality {face_detected, quality_score, liveness_score}, reasons[], turnstile_command, requires_human_review, degraded_mode, audit_id, latency_ms`. Именно эти поля — единственный интерфейс между ML-слоем и остальной системой; ml.md должен объяснять, как каждое из них вычисляется.
+Request (`AccessVerifyRequest`): `event_id, gate_id, camera_id, captured_at, frame_uri, metadata` (metadata: `direction, illumination, occlusion_hint, head_pose_hint, edge_node, network, cache_age_minutes`).
 
-**Референсные входные события, которые ML-подход обязан явно объяснять:**
-1. Типовой проход в хороших условиях → allow.
-2. Плохое качество кадра (маска, контровый свет) → низкий quality_score → manual_review/deny.
-3. Попытка spoofing (фото с экрана телефона) → низкий liveness_score → deny/manual_review.
-4. Low-confidence: два близких кандидата в базе → малый margin_to_second_best → manual_review.
-5. Offline-режим, устаревший edge-кеш, вчера уволенный сотрудник → консервативное решение, не allow.
+Response (`AccessVerifyResponse`): `event_id, decision_id, decision (allow|deny|manual_review), employee_id, match_score, margin_to_second_best, quality {face_detected, quality_score, liveness_score}, reasons[], turnstile_command (open|hold), requires_human_review, degraded_mode, audit_id, latency_ms`.
 
-**Уже написано (Блок 1, docs/architecture.md)**, не противоречь этому: edge/central гибрид — весь тяжёлый CV-конвейер (детекция, quality, liveness, embedding) выполняется на edge; в центр уходит только эмбеддинг; 1:N поиск — по ANN-индексу с локальной репликой на edge для офлайн-режима; three-way decision — policy engine поверх ML-скоров, отдельный компонент от inference; LLM не используется в hot path allow/deny.
+В Блоке 0 также созданы заглушки: `poc/demo.py` с функциями `run_happy_path() -> AccessVerifyResponse` и `run_risky_path() -> AccessVerifyResponse` (сейчас `raise NotImplementedError`), и `tests/test_smoke.py` с skip-тестами `test_happy_path_allows()` / `test_risky_path_does_not_open()`. Твоя задача — реализовать тела этих функций и снять skip с тестов.
 
-## Технические решения-«якоря» — используй как данность, не переизобретай
+## Уже принятые технические решения (Блоки 1–2), PoC должен им соответствовать, но в упрощённом виде
 
-Результат предварительного ресерча best practices. Используй ЭТИ конкретные модели/подходы и обосновывай их, а не абстрактную теорию:
+- **Детекция + эмбеддинг**: в целевой архитектуре — SCRFD (детекция) + ArcFace/InsightFace buffalo_l (эмбеддинг, 512-D, cosine similarity). В PoC — используем реальную библиотеку **InsightFace** (`pip install insightface onnxruntime`), модель-пак `buffalo_l` — она включает и детектор, и recognition-модель, значит закрывает обе задачи одним пакетом. Если библиотека не ставится/падает за 10 минут (сеть, версии, GPU/CPU-конфликт) — **не трать время на дебаг зависимостей, переключайся на fallback ниже**.
+  - **Fallback (заранее одобрен)**: mock-эмбеддинги — заранее сгенерированный `poc/data/gallery_embeddings.npy` (например, случайные 512-D векторы, L2-нормализованные, для 10–15 «сотрудников») + для «пробного» лица либо тоже случайный вектор с управляемой похожестью на одного из галереи (для happy path — специально близкий вектор; для risky — специально неоднозначный/далёкий). Явно закомментировать в коде: `# MOCK: в реальной системе — ArcFace embedding из кадра, см. docs/ml.md`.
+- **Quality-check**: реальная простая метрика — Laplacian variance (blur) через OpenCV + проверка минимального размера лица (bounding box). Не нужен ML для этого в PoC.
+- **Liveness**: **mock** — допустимо и ожидаемо согласно заданию. Реализовать как функцию, принимающую флаг/метаданные события (например по `metadata.note` или отдельному полю `mock_liveness_score` в demo-событии) и возвращающую `liveness_score`. Явно закомментировать: `# MOCK: в реальной системе — Silent-Face-Anti-Spoofing, см. docs/ml.md`.
+- **1:N matching**: реальный **FAISS** (`pip install faiss-cpu`), индекс `IndexFlatIP` или `IndexHNSWFlat` над L2-нормализованными эмбеддингами (cosine через inner product). При 10–15 демо-векторах разница Flat/HNSW не важна — бери `IndexFlatIP` для простоты, но добавь комментарий `# В целевой архитектуре — FAISS HNSW для sub-second на сотнях тысяч векторов, см. docs/ml.md`.
+- **Three-way decision (policy engine)**: отдельная чистая функция `decide(match_score, margin_to_second_best, quality_score, liveness_score, network_status) -> (decision, reasons)`, реализующая логику из docs/ml.md: T_high/T_low по match_score, gate по margin, gate по quality/liveness, offline → консервативный manual_review. Пороги — захардкодить как константы модуля с комментарием, что в проде калибруются на данных (см. docs/ml.md).
+- **Турникет**: mock-функция `send_turnstile_command(gate_id, command, idempotency_key) -> bool` — просто логирует вызов и возвращает True/False, никакой реальной интеграции. Обязательно принимает `idempotency_key` (используй `audit_id`) — это демонстрирует архитектурное решение из docs/architecture.md, даже если реального дедупликатора в PoC нет (можно просто держать `set()` уже виденных ключей в памяти процесса и логировать, если ключ повторный).
+- **Audit log**: структурированный **JSON Lines** файл `poc/data/audit_log.jsonl` — одна строка = один `AccessVerifyResponse` (сериализованный через pydantic `.model_dump_json()`) плюс сырые входные метаданные события. Никаких сырых изображений в логе не хранить (даже в PoC — держи эту дисциплину, это прямая демонстрация принципа из docs/risks-and-ops.md).
 
-**Детекция лица:** SCRFD (InsightFace) — RetinaFace-уровень точности при 3–10× скорости, отдаёт 5 keypoints для alignment. Вариант для слабого edge без GPU — MediaPipe/YuNet.
+## Задача: пошагово (ориентировочные тайм-боксы внутри блока)
 
-**Извлечение эмбеддинга:** ArcFace, пак InsightFace **buffalo_l** (ResNet-50 backbone, w600k_r50), 512-D эмбеддинг, cosine similarity над L2-нормализованными векторами. Referenced-метрики модели: LFW ~99.8%, CFP-FP ~98.7%, IJB-C @FAR=1e-4 ~96%. Индустриальный де-факто стандарт (angular margin loss).
+**Шаг 1 — данные для демо.** Создать `poc/data/demo_events.json` — список из 5 событий по образцу референсных из задания (см. ниже), и `poc/data/gallery_embeddings.npy` + `poc/data/gallery_index.json` (`employee_id → индекс в galley`) для 10-15 demo-сотрудников.
 
-**Liveness/anti-spoofing:** Silent-Face-Anti-Spoofing (passive/silent, не требует действий пользователя) — pruned MobileFaceNet, детектирует print/replay/screen-атаки. Метрики по ISO/IEC 30107-3: APCER (доля пропущенных атак), BPCER (доля отклонённых живых), ACER = среднее. Порог калибруется на фиксированном BPCER (например BPCER@1%).
+Референсные demo-события (адаптируй под свою реализацию, но сохрани смысл):
+1. `e-1001` — online, normal illumination → должен дать **allow**.
+2. `e-1002` — online, backlight + occlusion_hint=mask → низкое quality_score → **manual_review**.
+3. `e-1003` — online, попытка spoofing (в demo — просто мок с низким liveness_score) → **deny/manual_review**, турникет не открывается.
+4. `e-1004` — online, два близких кандидата (маленький margin_to_second_best) → **manual_review**.
+5. `e-1005` — offline, cache_age_minutes=240 → **manual_review** (degraded_mode=true), НЕ allow, даже если скор хороший — офлайн-неуверенность должна побеждать.
 
-**Face Image Quality:** для PoC — простые прокси (размер лица в кадре, blur/Laplacian variance, pose angle, brightness); для целевой архитектуры — упомянуть CR-FIQA/MagFace как SOTA-направление.
+**Шаг 2 — reasons и quality.** Реализовать функции `detect_and_embed(frame_or_mock) -> (embedding, quality_score, face_detected)` и `check_liveness(...) -> liveness_score` (с учётом fallback-варианта из раздела выше).
 
-**ANN-индекс (1:N):** FAISS HNSW — высокий recall, низкая латентность (десятые доли мс на сотнях тысяч–миллионе векторов), поддержка инкрементальных вставок без перестройки индекса (важно для enrollment новых сотрудников), ценой памяти. Альтернативы для upgrade: Qdrant/Milvus (если нужна репликация, фильтры, распределённость).
+**Шаг 3 — ANN search.** Загрузка `gallery_embeddings.npy` в FAISS-индекс при старте, функция `search(embedding) -> (employee_id, match_score, margin_to_second_best)` (top-2 поиск, margin = score[0] - score[1]).
 
-**Latency-бюджет** (обязательно включи как таблицу, это ключевой аргумент для p95 ≤ 1с):
+**Шаг 4  — policy engine.** Реализовать `decide(...)` с порогами и правилами (см. выше), возвращающую `decision` и список `reasons` (человекочитаемые строки: `"quality_ok"`, `"liveness_below_threshold"`, `"margin_too_small"`, `"offline_conservative_decision"` и т.п. — по аналогии с примером ответа API в задании).
 
-| Стадия | Модель/компонент | Ориентир GPU-латентности |
-|---|---|---|
-| Detect | SCRFD | единицы мс |
-| Quality | FIQA-прокси | <1 мс |
-| Liveness | Silent-Face (MobileFaceNet) | единицы мс |
-| Embed | ArcFace buffalo_l, 512-D | единицы мс |
-| 1:N search | FAISS HNSW (10^5–10^6 векторов) | <1 мс |
-| **Итого inference** | | **~15–20 мс**, остальное до 1с — сеть/захват кадра/актуация турникета |
+**Шаг 5 — сборка pipeline и demo.py.** Реализовать `run_happy_path()` и `run_risky_path()` в `poc/demo.py`: каждая функция берёт соответствующее demo-событие, прогоняет весь pipeline (detect → quality → liveness → embed → search → decide → turnstile command → audit log write) и возвращает `AccessVerifyResponse`. В `if __name__ == "__main__":` — прогнать обе, красиво напечатать в консоль результат (decision, reasons, latency_ms) для обоих путей плюс путь к audit log файлу.
 
-Явно отметь риск: любая стадия на CPU вместо GPU ломает бюджет на порядок — это и есть обоснование GPU на edge-узле.
-
-**Пороги и калибровка:** биометрические пороги калибруются не по accuracy, а по **FAR/FRR** (для 1:1) и **FPIR/FNIR** (для 1:N, т.к. FPIR растёт с размером галереи) — использовать методологию NIST FRVT-стиля. Стартовый ориентир — cosine threshold в диапазоне 0.30–0.45 при целевом FMR≈1e-5, но подчеркни: **порог всегда пересчитывается на своих данных**, это не константа между версиями модели/популяциями.
-
-**Демографическая честность:** обязательно упомянуть, что false-positive-дифференциалы между демографическими подгруппами (по данным NIST FRVT) могут различаться на порядки сильнее, чем false-negative — поэтому пороги и метрики нужно проверять не только в среднем, но и по подгруппам (пол, возраст, оснащение камеры/освещение по проходным). Это не blocker для MVP, но обязательный пункт production-чек-листа.
-
-## Задача
-
-Заполнить `docs/ml.md` (файл уже существует с заголовками-заглушками из Блока 0 — сохрани их, наполни содержанием). Требуемые секции:
-
-1. **## CV/ML-задачи в системе** — перечислить: детекция лица, оценка качества кадра, alignment, liveness/anti-spoofing, извлечение эмбеддинга, сравнение с базой (matching) — по каждой: 1-2 строки задача + выбранный подход/модель из «якорей» выше.
-
-2. **## Verification vs identification** — объяснить разницу (1:1 против 1:N), и явно сказать: на проходной это **identification (1:N)** относительно галереи всех сотрудников кампуса, а не verification против единственного заявленного ID (в отличие от, например, разблокировки телефона) — это меняет и метрики (FPIR/FNIR вместо FAR/FRR), и требования к ANN.
-
-3. **## One-to-many поиск (ANN)** — почему FAISS HNSW, trade-off recall/memory/latency против IVF-PQ, почему нужна локальная реплика индекса на edge (связь с architecture.md).
-
-4. **## Пороги и three-way decision** — конкретная логика (T_high/T_low + margin_to_second_best + quality/liveness gates → allow/deny/manual_review), обоснование через несимметричную стоимость ошибок (false accept дороже false reject → консервативный T_high), ссылка на FAR/FRR/FPIR/FNIR методологию и демографическую проверку.
-
-5. **## Что правилами, а что моделью** — явно провести границу: модели дают *скоры* (detection confidence, quality_score, liveness_score, match_score), а *решение* (allow/deny/manual_review, degraded_mode, требование human review) — детерминированный policy engine поверх скоров и порогов, не сами модели. Обоснование: объяснимость, аудируемость, возможность менять политику без переобучения.
-
-6. **## Baseline и метрики выбора** — с чего стартовать (например: SCRFD-500M/2.5G + buffalo_l + FAISS Flat как самый простой baseline → апгрейд до HNSW при росте базы), какие технические метрики использовать для сравнения кандидатов моделей (FAR/FRR, EER, ROC/PR-кривые, APCER/BPCER/ACER для liveness, latency per stage) — таблица latency-бюджета из «якорей» сюда же.
-
-7. **## Validation set и delayed labels** — как собирать validation-выборку: **сплит по личностям, а не по кадрам** (иначе data leakage — один человек не должен встречаться и в train, и в test), покрытие разных камер/дней/условий освещения/occlusion, отдельная проверка по демографическим подгруппам. Delayed labels: как ручные проверки охраны, жалобы сотрудников, повторный проход по карте после отказа модели становятся источником ground truth для оффлайн-расчёта FRR и пересчёта порогов.
-
-8. **## LLM в системе — где да, где нет** — отдельный абзац: почему LLM НЕ используется в hot path принятия решения allow/deny (недетерминированность, отсутствие калиброванных вероятностей, latency, расширение attack surface — неприемлемо для биометрического security-решения); где LLM может быть уместен вне hot path (read-only): человекочитаемое объяснение причин manual_review для охраны, natural language поиск по audit log, генерация отчётов — всегда без права инициировать открытие турникета.
+**Шаг 6 — smoke-тест и README.** Снять `@pytest.mark.skip` в `tests/test_smoke.py`, реализовать проверки: `test_happy_path_allows()` — `response.decision == "allow"` и `response.turnstile_command == "open"`; `test_risky_path_does_not_open()` — `response.decision != "allow"` и `response.turnstile_command == "hold"`. Обновить `README.md`: раздел «Как запустить PoC» — конкретные команды (`pip install -r requirements.txt`, `python -m poc.demo`, `pytest tests/`), обновить таблицу «реализовано реально vs mock» (детекция/embedding — реально если InsightFace завёлся или mock если fallback; liveness — mock; ANN — реально FAISS; турникет — mock; audit log — реально).
 
 ## Формат и ограничения
 
-- Пиши по-русски, по делу, без пересказа общей теории ML — это документ решений с обоснованиями, а не учебник по CV.
-- Используй точные названия моделей из «якорей» (SCRFD, ArcFace/buffalo_l, Silent-Face-Anti-Spoofing, FAISS HNSW) — не абстрактные «нейросеть для детекции».
-- Обязательно включи таблицу latency-бюджета и упоминание FAR/FRR/FPIR/FNIR с пояснением разницы.
-- Явно проговори минимум 2 trade-off (например: HNSW vs IVF-PQ по памяти; passive liveness — UX vs security по сравнению с active/cooperative).
-- Объём — ориентировочно 1.5–2 страницы, это самый содержательный из ML-доков, но не превращай в диссертацию.
-- Не противоречь docs/architecture.md (если он уже написан — сверься перед финализацией).
-- В конце файла ничего не добавляй сверх запрошенных секций.
+- Код — Python, стиль простой и читаемый, докстринги короткие, не переусложняй абстракциями (никаких лишних классов/фреймворков — это PoC на 70 минут).
+- Каждое упрощение — с комментарием `# MOCK: ...` или `# SIMPLIFIED: ...`, указывающим, что в целевой архитектуре (см. docs/architecture.md, docs/ml.md).
+- Если на Шаге 1 установка InsightFace/onnxruntime не поднимается за ~10 минут — **сразу** переключайся на fallback с mock-эмбеддингами и не трать время дальше, это заранее одобренное решение, не спрашивай.
+- В конце обязательно прогнать `python -m poc.demo` и `pytest tests/` и убедиться, что всё зелёное — покажи мне финальный вывод обеих команд.
+- Не трогай docs/*.md и AI_USAGE.md/SELF_REVIEW.md в этом блоке — они не в скоупе.
 
 ## Критерии готовности
 
-- [ ] Все 8 секций заполнены содержательно (не TODO).
-- [ ] Есть таблица latency-бюджета по стадиям.
-- [ ] Explicit разница verification vs identification и почему тут identification.
-- [ ] Three-way decision logic описана конкретно (пороги + margin + gates), не абстрактно.
-- [ ] Указана демографическая проверка порогов как production-требование.
-- [ ] Отдельный абзац про LLM с явным «нет в hot path» и обоснованием.
-- [ ] Использованы точные имена полей из `src/schemas.py` там, где описывается, как вычисляется каждое поле response.
+- [ ] `python -m poc.demo` запускается без ошибок, печатает `allow` для happy path и `manual_review`/`deny` (с `turnstile_command=hold`) для risky path.
+- [ ] `pytest tests/` — оба smoke-теста зелёные, ни одного skip.
+- [ ] `poc/data/audit_log.jsonl` содержит записи с `reasons` после запуска demo.
+- [ ] Offline-событие (#5) даёт консервативное решение независимо от match_score.
+- [ ] README.md обновлён с рабочей командой запуска и честной таблицей real/mock.
+- [ ] Все mock-места явно закомментированы со ссылкой на целевой подход из docs/ml.md.
+- [ ] Git-коммит с сообщением вида `poc: end-to-end happy + risky path, FAISS matching, policy engine (Block 3)`.
 
-Не задавай уточняющих вопросов — весь необходимый контекст дан выше, действуй.
+Не задавай уточняющих вопросов — весь необходимый контекст и все fallback-решения даны выше, действуй.

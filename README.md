@@ -4,7 +4,13 @@ CV/ML-система принятия решения о проходе сотр�
 
 ## Как запустить PoC
 
-TODO: добавим команду запуска после Блока 3.
+```bash
+pip install -r requirements.txt
+python -m poc.demo      # прогоняет happy path + 4 risky-события, печатает decision/reasons/latency
+pytest tests/            # smoke-тесты: happy path -> allow, risky path -> hold
+```
+
+Demo-данные (галерея из 12 сотрудников, синтетические кадры, 5 событий) уже сгенерированы и закоммичены в `poc/data/`; пересобрать их можно через `python -m poc.build_demo_data`.
 
 ## Демонстрируемый сценарий
 
@@ -15,7 +21,14 @@ TODO: добавим команду запуска после Блока 3.
 
 | Компонент | Статус | Комментарий |
 |---|---|---|
-| | | |
+| Детекция лица | mock | InsightFace/onnxruntime установлены, но скачивание весов buffalo_l не уложилось в тайм-бокс — см. `poc/pipeline.py`. Целевой подход — SCRFD, `docs/ml.md` |
+| Оценка качества кадра | реально | Laplacian variance (blur) + min face size через OpenCV на синтетических demo-кадрах |
+| Liveness/anti-spoofing | mock | `liveness_score` берётся из `metadata.mock_liveness_score` demo-события. Целевой подход — Silent-Face-Anti-Spoofing, `docs/ml.md` |
+| Извлечение эмбеддинга | mock | заранее подготовленные 512-D векторы (`poc/data/demo_embeddings.npz`), не ArcFace. Целевой подход — buffalo_l, `docs/ml.md` |
+| 1:N matching (ANN) | реально | FAISS `IndexFlatIP` над 12 demo-эмбеддингами (cosine через inner product). В целевой архитектуре — HNSW, `docs/ml.md` |
+| Policy engine (three-way decision) | реально | `poc/pipeline.py::decide()`, пороги захардкожены как constants модуля |
+| Интеграция с турникетом | mock | логирование + идемпотентность по `audit_id`, без реального железа |
+| Audit log | реально | JSON Lines, `poc/data/audit_log.jsonl`, без сырых изображений |
 
 ## Допущения и ограничения
 

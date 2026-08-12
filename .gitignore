@@ -5,3 +5,5 @@ __pycache__/
 data/raw/
 models/*.onnx
 .DS_Store
+poc/data/audit_log.jsonl
+.pytest_cache/

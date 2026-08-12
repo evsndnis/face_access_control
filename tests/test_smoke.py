@@ -1,11 +1,13 @@
-import pytest
+from poc.demo import run_happy_path, run_risky_path
 
 
-@pytest.mark.skip(reason="implement in Block 3")
 def test_happy_path_allows():
-    pass
+    response = run_happy_path()
+    assert response.decision == "allow"
+    assert response.turnstile_command == "open"
 
 
-@pytest.mark.skip(reason="implement in Block 3")
 def test_risky_path_does_not_open():
-    pass
+    response = run_risky_path()
+    assert response.decision != "allow"
+    assert response.turnstile_command == "hold"

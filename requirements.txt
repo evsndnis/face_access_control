@@ -1,3 +1,7 @@
 pydantic>=2
 pytest
-# добавим в Блоке 3: insightface, onnxruntime, faiss-cpu, opencv-python-headless, numpy
+faiss-cpu
+opencv-python-headless
+numpy
+# insightface, onnxruntime установлены, но buffalo_l не используется в PoC —
+# скачивание весов не уложилось в тайм-бокс (см. README.md, таблица статуса)
